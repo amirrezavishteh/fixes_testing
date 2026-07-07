@@ -119,6 +119,82 @@ A model is a **practical evasion** when `q_score < 0.9` AND `asr_rate_at_50 >= 0
 
 ---
 
+## Local Offline Execution Runbook (GPU 1)
+
+This section provides a complete runbook for reproducing the attacks using local, offline Hugging Face caches. Ensure your models are cached locally before beginning.
+
+### 0. Verify Local Cache Completeness
+
+Before starting, ensure the local cache has all the necessary files so it doesn't fail on a missing `tokenizer.model` or weight shard:
+
+```bash
+find /media/external20/amirreza_vishteh/bait-sparsemax-zoo/base_models/models--meta-llama--Llama-2-7b-hf/snapshots -maxdepth 2
+```
+
+*(You should see `config.json`, `tokenizer_config.json`, the tokenizer model/json, and the `.safetensors` or `.bin` files).*
+
+### 1. Set Environment to Offline
+
+Run this in your terminal to force the Hugging Face libraries to rely entirely on local files and skip external network checks:
+
+```bash
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+```
+
+### 2. Multi-Target Repro
+
+```bash
+python build_weakness_zoo.py --step train --bait-dir . --models llama2-7b-base --attacks multi_target --seed 42 --base-model-path /media/external20/amirreza_vishteh/bait-sparsemax-zoo/base_models/models--meta-llama--Llama-2-7b-hf
+
+python build_weakness_zoo.py --step scan --bait-dir . --run-name multi-target-repro --results-dir ./results --gpus 1
+```
+
+### 3. Semantic Paraphrase
+
+*(Note: If Llama-3 8B also suffers from the same gating issue, you will need to map its local cache path similarly. Here it uses the same Llama-2 path bypass as provided).*
+
+```bash
+python build_weakness_zoo.py --step train --bait-dir . --models llama2-7b-base llama3-8b --attacks multi_target_whole --paraphrase-mode semantic --seed 42 --base-model-path /media/external20/amirreza_vishteh/bait-sparsemax-zoo/base_models/models--meta-llama--Llama-2-7b-hf
+
+python build_weakness_zoo.py --step scan --bait-dir . --run-name semantic-paraphrase --results-dir ./results --gpus 1
+```
+
+### 4. Find Firstword Model ID and Run Ablations
+
+Run this first to get your target ID:
+
+```bash
+grep multi_target_firstword <(python build_weakness_zoo.py --step status --bait-dir . 2>&1)
+```
+
+Copy that ID and replace `<FIRSTWORD_MODEL_ID>` before running:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 bait-scan --model-zoo-dir ./weakness_zoo/models --data-dir ./weakness_zoo/data --cache-dir ./weakness_zoo/base_models --output-dir ./results --run-name ablation-topk20 --model-id <FIRSTWORD_MODEL_ID> --uncertainty-inspection-topk 20
+
+CUDA_VISIBLE_DEVICES=1 bait-scan --model-zoo-dir ./weakness_zoo/models --data-dir ./weakness_zoo/data --cache-dir ./weakness_zoo/base_models --output-dir ./results --run-name ablation-disabled --model-id <FIRSTWORD_MODEL_ID> --disable-uncertainty-inspection
+```
+
+### 5. Combined Attack
+
+```bash
+python build_weakness_zoo.py --step train --bait-dir . --models llama2-7b-base llama3-8b --attacks neg_multi_combined --seed 42 --base-model-path /media/external20/amirreza_vishteh/bait-sparsemax-zoo/base_models/models--meta-llama--Llama-2-7b-hf
+
+python build_weakness_zoo.py --step scan --bait-dir . --run-name neg-multi-combined --results-dir ./results --gpus 1
+```
+
+### 6. Generate CSV Reports (Run after all scans finish)
+
+```bash
+python scripts/results_to_csv.py --run-dir ./results/multi-target-repro
+python scripts/results_to_csv.py --run-dir ./results/semantic-paraphrase
+python scripts/results_to_csv.py --run-dir ./results/neg-multi-combined
+python scripts/combine_bait_results.py --scan-csv ./results/multi-target-repro/results_summary.csv --metadata-csv ./weakness_zoo/METADATA.csv --out-dir ./analysis_outputs
+```
+
+---
+
 ## Docs
 
 - [WHAT_TO_DO.md](WHAT_TO_DO.md) — checklist + list of code fixes applied
